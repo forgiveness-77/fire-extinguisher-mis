@@ -1,0 +1,15 @@
+{
+  "name": "fems-services",
+  "version": "1.0.0",
+  "description": "TZW LTD FEMS - Microservices root",
+  "scripts": {
+    "install:all": "cd user-service && npm install && cd ../extinguisher-service && npm install && cd ../inspection-service && npm install && cd ../report-service && npm install && cd ../api-gateway && npm install",
+    "prisma:generate": "cd user-service && npm run prisma:generate && cd ../extinguisher-service && npm run prisma:generate && cd ../inspection-service && npm run prisma:generate && cd ../report-service && npm run prisma:generate",
+    "prisma:push": "cd user-service && npm run prisma:push && cd ../extinguisher-service && npm run prisma:push && cd ../inspection-service && npm run prisma:push && cd ../report-service && npm run prisma:push",
+    "start:users": "cd user-service && npm start",
+    "start:extinguishers": "cd extinguisher-service && npm start",
+    "start:inspections": "cd inspection-service && npm start",
+    "start:reports": "cd report-service && npm start",
+    "start:gateway": "cd api-gateway && npm start"
+  }
+}

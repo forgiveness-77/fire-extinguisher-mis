@@ -1,0 +1,81 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(uuid()) @db.VarChar(36)
+  firstName    String    @map("first_name") @db.VarChar(100)
+  lastName     String    @map("last_name") @db.VarChar(100)
+  email        String    @unique @db.VarChar(255)
+  passwordHash String    @map("password_hash") @db.VarChar(255)
+  role         String    @default("user") @db.VarChar(50)
+  status       String    @default("active") @db.VarChar(50)
+  resetToken   String?   @map("reset_token") @db.VarChar(255)
+  resetExpiry  DateTime? @map("reset_expiry")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+model Extinguisher {
+  id               String   @id @default(uuid()) @db.VarChar(36)
+  serialNumber     String   @unique @map("serial_number") @db.VarChar(100)
+  location         String   @db.VarChar(255)
+  type             String   @db.VarChar(50)
+  size             Float
+  installationDate DateTime @map("installation_date") @db.Date
+  expiryDate       DateTime @map("expiry_date") @db.Date
+  assignedUserId   String?  @map("assigned_user_id") @db.VarChar(36)
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@map("extinguishers")
+}
+
+model Inspection {
+  id             String   @id @default(uuid()) @db.VarChar(36)
+  extinguisherId String   @map("extinguisher_id") @db.VarChar(36)
+  scheduledById  String   @map("scheduled_by_id") @db.VarChar(36)
+  inspectorId    String?  @map("inspector_id") @db.VarChar(36)
+  scheduledDate  DateTime @map("scheduled_date") @db.Date
+  scheduledTime  String   @map("scheduled_time") @db.VarChar(10)
+  status         String   @default("pending") @db.VarChar(50)
+  notes          String?  @db.Text
+  notifyEmails   String[] @map("notify_emails")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("inspections")
+}
+
+model MaintenanceLog {
+  id              String   @id @default(uuid()) @db.VarChar(36)
+  extinguisherId  String   @map("extinguisher_id") @db.VarChar(36)
+  inspectorId     String   @map("inspector_id") @db.VarChar(36)
+  actionsTaken    String   @map("actions_taken") @db.Text
+  dateOfAction    DateTime @map("date_of_action") @db.Date
+  conditionsNoted String   @map("conditions_noted") @db.Text
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("maintenance_logs")
+}
+
+model Notification {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  userId    String   @map("user_id") @db.VarChar(36)
+  type      String   @db.VarChar(100)
+  title     String   @db.VarChar(255)
+  message   String   @db.Text
+  isRead    Boolean  @default(false) @map("is_read")
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("notifications")
+}
