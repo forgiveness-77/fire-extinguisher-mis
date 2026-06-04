@@ -39,7 +39,11 @@ async function main() {
   for (const e of extinguishers) {
     await prisma.extinguisher.upsert({
       where: { serialNumber: e.serialNumber },
-      update: { assignedUserId: e.assignedUserId },
+      update: {
+        location: e.location, type: e.type, size: e.size,
+        installationDate: e.installationDate, expiryDate: e.expiryDate,
+        assignedUserId: e.assignedUserId,
+      },
       create: e,
     });
     const status = e.expiryDate < now ? 'expired' : e.assignedUserId ? 'active' : 'inactive';

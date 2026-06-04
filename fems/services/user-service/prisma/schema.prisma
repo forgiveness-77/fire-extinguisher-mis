@@ -60,7 +60,8 @@ model MaintenanceLog {
   inspectorId     String   @map("inspector_id") @db.VarChar(36)
   actionsTaken    String   @map("actions_taken") @db.Text
   dateOfAction    DateTime @map("date_of_action") @db.Date
-  conditionsNoted String   @map("conditions_noted") @db.Text
+  issuesIdentified String  @map("issues_identified") @db.Text
+  notes           String?  @db.Text
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 

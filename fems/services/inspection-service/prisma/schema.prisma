@@ -1,4 +1,4 @@
-﻿generator client {
+generator client {
   provider = "prisma-client-js"
 }
 
@@ -45,9 +45,9 @@ model Inspection {
   inspectorId    String?  @map("inspector_id") @db.VarChar(36)
   scheduledDate  DateTime @map("scheduled_date") @db.Date
   scheduledTime  String   @map("scheduled_time") @db.VarChar(10)
-  status         String   @default("pending") @db.VarChar(50)
+  status         String   @default("scheduled") @db.VarChar(50)
   notes          String?  @db.Text
-  notifyEmails   String[] @map("notify_emails")
+  notifyPersonnel String[] @map("notify_personnel")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
@@ -55,14 +55,15 @@ model Inspection {
 }
 
 model MaintenanceLog {
-  id              String   @id @default(uuid()) @db.VarChar(36)
-  extinguisherId  String   @map("extinguisher_id") @db.VarChar(36)
-  inspectorId     String   @map("inspector_id") @db.VarChar(36)
-  actionsTaken    String   @map("actions_taken") @db.Text
-  dateOfAction    DateTime @map("date_of_action") @db.Date
-  conditionsNoted String   @map("conditions_noted") @db.Text
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+  id               String   @id @default(uuid()) @db.VarChar(36)
+  extinguisherId   String   @map("extinguisher_id") @db.VarChar(36)
+  inspectorId      String   @map("inspector_id") @db.VarChar(36)
+  actionsTaken     String   @map("actions_taken") @db.Text
+  dateOfAction     DateTime @map("date_of_action") @db.Date
+  conditionsNoted  String   @map("conditions_noted") @db.Text
+  notes            String?  @db.Text
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
 
   @@map("maintenance_logs")
 }
@@ -79,4 +80,3 @@ model Notification {
 
   @@map("notifications")
 }
-

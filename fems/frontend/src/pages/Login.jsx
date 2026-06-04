@@ -17,8 +17,12 @@ export default function Login() {
     e.preventDefault();
     setLoading(true);
     setError('');
+    // Read directly from DOM elements so browser autofill (which skips React's
+    // onChange) is always picked up. Falls back to React state if elements absent.
+    const email    = (e.target.elements['email']?.value    || form.email).trim();
+    const password =  e.target.elements['password']?.value || form.password;
     try {
-      const res = await login(form);
+      const res = await login({ email, password });
       signIn(res.data.token, res.data.user);
       toast.success(`Welcome back, ${res.data.user.firstName}`);
       navigate('/dashboard');
@@ -66,11 +70,11 @@ export default function Login() {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="label">Email address</label>
-              <input className="input" type="email" placeholder="you@example.com" value={form.email} onChange={set('email')} required />
+              <input className="input" type="email" name="email" autoComplete="email" placeholder="you@example.com" value={form.email} onChange={set('email')} required />
             </div>
             <div>
               <label className="label">Password</label>
-              <input className="input" type="password" placeholder="••••••••" value={form.password} onChange={set('password')} required />
+              <input className="input" type="password" name="password" autoComplete="current-password" placeholder="••••••••" value={form.password} onChange={set('password')} required />
             </div>
             <button type="submit" disabled={loading} className="btn-crimson w-full mt-2">
               {loading

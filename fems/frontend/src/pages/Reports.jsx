@@ -1,25 +1,62 @@
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import { getReportSummary, getExpiredReport, getMaintenanceHistory, getInspectionReport, exportPDF, exportCSV } from '../api';
+import { useAuth } from '../context/AuthContext';
+
+const COLORS = ['#DC143C', '#f43f5e', '#fda4af', '#fecdd3'];
 
 function download(blob, filename) {
   const url = URL.createObjectURL(blob);
-  const a   = document.createElement('a');
+  const a = document.createElement('a');
   a.href = url; a.download = filename; a.click();
   URL.revokeObjectURL(url);
 }
 
-const EXPORT_TYPES = ['extinguishers', 'inspections', 'expired', 'maintenance', 'users'];
+const EXPORT_TYPES = [
+  { key: 'extinguishers', label: 'Extinguisher Inventory',    desc: 'Full inventory with computed status',     hasPdf: true },
+  { key: 'inspections',   label: 'Inspection Records',         desc: 'All inspection schedules and statuses',   hasPdf: true },
+  { key: 'expired',       label: 'Expired Extinguishers',      desc: 'Extinguishers past their expiry date',    hasPdf: true },
+  { key: 'maintenance',   label: 'Maintenance History',        desc: 'All maintenance logs with issues/notes',  hasPdf: true },
+  { key: 'users',         label: 'User Accounts',              desc: 'System users (Admin only)',               hasPdf: false },
+];
+
+function SectionHeader({ title, sub }) {
+  return (
+    <div className="mb-4">
+      <h2 className="font-semibold text-gray-800">{title}</h2>
+      {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
+    </div>
+  );
+}
+
+function MetricCard({ label, value, color = 'gray', sub }) {
+  const colors = {
+    red:    'bg-red-50   border-red-200   text-red-700',
+    green:  'bg-green-50 border-green-200 text-green-700',
+    amber:  'bg-amber-50 border-amber-200 text-amber-700',
+    blue:   'bg-blue-50  border-blue-200  text-blue-700',
+    crimson:'bg-crimson-50 border-crimson-200 text-crimson-700',
+    gray:   'bg-gray-50  border-gray-200  text-gray-700',
+  };
+  return (
+    <div className={`card border text-center ${colors[color]}`}>
+      <p className="text-[11px] uppercase tracking-wider font-semibold opacity-70">{label}</p>
+      <p className="text-3xl font-bold mt-1">{value ?? '—'}</p>
+      {sub && <p className="text-xs opacity-60 mt-1">{sub}</p>}
+    </div>
+  );
+}
 
 export default function Reports() {
+  const { isAdmin } = useAuth();
   const [summary,  setSummary]  = useState(null);
   const [expired,  setExpired]  = useState(null);
   const [history,  setHistory]  = useState(null);
   const [inspRpt,  setInspRpt]  = useState(null);
   const [loading,  setLoading]  = useState(true);
   const [exporting, setExporting] = useState('');
-  const [period, setPeriod]     = useState('monthly');
+  const [period,   setPeriod]   = useState('monthly');
 
   useEffect(() => {
     Promise.all([
@@ -39,7 +76,7 @@ export default function Reports() {
     setExporting(`pdf-${type}`);
     try {
       const res = await exportPDF(type);
-      download(new Blob([res.data], { type: 'application/pdf' }), `fems-${type}-report.pdf`);
+      download(new Blob([res.data], { type: 'application/pdf' }), `fems-${type}-${new Date().toISOString().split('T')[0]}.pdf`);
       toast.success('PDF downloaded');
     } catch (err) { toast.error(err.message); }
     finally { setExporting(''); }
@@ -49,7 +86,7 @@ export default function Reports() {
     setExporting(`csv-${type}`);
     try {
       const res = await exportCSV(type);
-      download(new Blob([res.data], { type: 'text/csv' }), `fems-${type}.csv`);
+      download(new Blob([res.data], { type: 'text/csv' }), `fems-${type}-${new Date().toISOString().split('T')[0]}.csv`);
       toast.success('CSV downloaded');
     } catch (err) { toast.error(err.message); }
     finally { setExporting(''); }
@@ -62,41 +99,43 @@ export default function Reports() {
   );
 
   const insp = inspRpt?.summary;
-  const inspStatusData = insp
-    ? Object.entries(insp.byStatus || {}).map(([name, value]) => ({ name, value }))
+  const inspStatusData = insp?.byStatus
+    ? Object.entries(insp.byStatus).map(([name, value]) => ({ name, value }))
     : [];
+  const grouped = history?.summary?.grouped?.slice(-8) || [];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div>
         <h1 className="page-title">Reports</h1>
-        <p className="page-subtitle">Real-time analytics and data exports — generated {new Date().toLocaleString()}</p>
+        <p className="page-subtitle">Real-time analytics — {new Date().toLocaleString()}</p>
       </div>
 
-      {/* Summary grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {[
-          { label: 'Total Extinguishers', value: summary?.extinguishers?.total, color: 'text-crimson-700' },
-          { label: 'Active',              value: summary?.extinguishers?.active, color: 'text-green-700' },
-          { label: 'Expired',             value: summary?.extinguishers?.expired, color: 'text-red-600' },
-          { label: 'Expiring (30 days)',  value: summary?.extinguishers?.expiringSoon, color: 'text-amber-600' },
-        ].map(s => (
-          <div key={s.label} className="card text-center">
-            <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">{s.label}</p>
-            <p className={`text-3xl font-bold mt-1 ${s.color}`}>{s.value ?? '—'}</p>
-          </div>
-        ))}
-      </div>
+      {/* ── INVENTORY REPORTS ─────────────────────────────────── */}
+      <section>
+        <SectionHeader title="Inventory Report" sub="Fire extinguisher stock overview" />
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <MetricCard label="Total Stock"    value={summary?.extinguishers?.total}       color="crimson" sub="All registered" />
+          <MetricCard label="Active"         value={summary?.extinguishers?.active}       color="green"   sub="Assigned & valid" />
+          <MetricCard label="Inactive"       value={summary?.extinguishers?.inactive}     color="gray"    sub="Unassigned" />
+          <MetricCard label="Expired"        value={summary?.extinguishers?.expired}      color="red"     sub="Past expiry date" />
+        </div>
+      </section>
 
-      {/* Inspection status + Maintenance history charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Inspection by status */}
+      {/* ── INSPECTION REPORTS ────────────────────────────────── */}
+      <section>
+        <SectionHeader title="Inspection Report" sub="Schedule and completion tracking" />
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+          <MetricCard label="Total Inspections" value={insp?.total}                 color="blue" />
+          <MetricCard label="Pending"           value={summary?.inspections?.pending}   color="amber" sub="Awaiting confirmation" />
+          <MetricCard label="Completed"         value={summary?.inspections?.completed} color="green" />
+          <MetricCard label="Overdue"           value={summary?.inspections?.overdue}   color="red"   sub="Past date, not done" />
+        </div>
+
         <div className="card">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="font-semibold text-gray-800 text-sm">Inspection Status</h3>
-              <p className="text-xs text-gray-400">Total: {insp?.total ?? 0} | Upcoming: {insp?.upcoming ?? 0}</p>
-            </div>
+          <div className="flex items-center justify-between mb-3">
+            <p className="font-semibold text-sm text-gray-700">Inspections by Status</p>
+            <p className="text-xs text-gray-400">Upcoming: {insp?.upcoming ?? 0}</p>
           </div>
           {inspStatusData.length > 0 ? (
             <ResponsiveContainer width="100%" height={180}>
@@ -107,108 +146,128 @@ export default function Reports() {
                 <Bar dataKey="value" fill="#DC143C" radius={[4, 4, 0, 0]} name="Count" />
               </BarChart>
             </ResponsiveContainer>
-          ) : <p className="h-40 flex items-center justify-center text-gray-400 text-sm">No data</p>}
+          ) : <p className="text-center text-sm text-gray-400 py-8">No inspection data</p>}
+        </div>
+      </section>
+
+      {/* ── COMPLIANCE REPORTS ───────────────────────────────── */}
+      <section>
+        <SectionHeader title="Compliance Report" sub="Safety and regulatory status" />
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+          <MetricCard label="Compliant"          value={summary?.compliance?.compliant}         color="green" sub="Valid & not expiring" />
+          <MetricCard label="Expired"            value={summary?.compliance?.expired}           color="red"   sub="Requires immediate action" />
+          <MetricCard label="Expiring (60 days)" value={summary?.extinguishers?.expiringSoon}   color="amber" sub="Schedule renewal" />
+          <MetricCard label="Overdue Inspections" value={summary?.compliance?.overdueInspections} color="red" sub="Unattended inspections" />
         </div>
 
-        {/* Maintenance history */}
+        {/* Expired extinguishers table */}
+        {expired && (expired.expired.count > 0 || expired.expiringSoon.count > 0) && (
+          <div className="card">
+            <div className="flex items-center justify-between mb-4">
+              <p className="font-semibold text-sm text-gray-700">
+                Non-Compliant Extinguishers
+                <span className="ml-2 text-xs text-red-600 font-normal">
+                  ({expired.expired.count} expired, {expired.expiringSoon.count} expiring soon)
+                </span>
+              </p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[480px]">
+                <thead className="table-head">
+                  <tr>
+                    {['Serial No.', 'Location', 'Type', 'Expiry Date', 'Compliance Status'].map(h => (
+                      <th key={h} className="table-head-cell">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...expired.expired.data, ...expired.expiringSoon.data].slice(0, 10).map(e => (
+                    <tr key={e.id} className="table-row">
+                      <td className="table-cell font-mono font-semibold text-xs">{e.serialNumber}</td>
+                      <td className="table-cell">{e.location}</td>
+                      <td className="table-cell">{e.type}</td>
+                      <td className="table-cell text-xs">{e.expiryDate?.split('T')[0]}</td>
+                      <td className="table-cell">
+                        <span className={`badge ${new Date(e.expiryDate) < new Date() ? 'badge-expired' : 'badge-maintenance'}`}>
+                          {new Date(e.expiryDate) < new Date() ? 'Expired' : 'Expiring Soon'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* ── MAINTENANCE REPORTS ───────────────────────────────── */}
+      <section>
+        <SectionHeader title="Maintenance Report" sub="Activity frequency and history" />
+        <div className="grid grid-cols-2 gap-4 mb-4">
+          <MetricCard label="Total Logs"        value={summary?.maintenance?.total}           color="blue" />
+          <MetricCard label="Last 30 Days"      value={summary?.maintenance?.lastThirtyDays}  color="green" sub="Recent activity" />
+        </div>
+
         <div className="card">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-3">
             <div>
-              <h3 className="font-semibold text-gray-800 text-sm">Maintenance Activity</h3>
-              <p className="text-xs text-gray-400">Total logs: {history?.summary?.total ?? 0}</p>
+              <p className="font-semibold text-sm text-gray-700">Maintenance Frequency</p>
+              <p className="text-xs text-gray-400">Activities over time</p>
             </div>
             <select className="input w-32 text-xs" value={period} onChange={e => setPeriod(e.target.value)}>
               {['daily', 'monthly', 'yearly'].map(p => <option key={p} value={p}>{p}</option>)}
             </select>
           </div>
-          {history?.summary?.grouped?.length > 0 ? (
+          {grouped.length > 0 ? (
             <ResponsiveContainer width="100%" height={180}>
-              <BarChart data={history.summary.grouped.slice(-8)} barSize={28}>
+              <BarChart data={grouped} barSize={28}>
                 <XAxis dataKey="period" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
                 <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                 <Tooltip contentStyle={{ borderRadius: 8, fontSize: 12 }} cursor={{ fill: '#fff1f2' }} />
                 <Bar dataKey="count" fill="#be123c" radius={[4, 4, 0, 0]} name="Activities" />
               </BarChart>
             </ResponsiveContainer>
-          ) : <div className="h-40 flex items-center justify-center text-gray-400 text-sm">No data</div>}
+          ) : <p className="text-center text-sm text-gray-400 py-8">No maintenance data yet</p>}
         </div>
-      </div>
+      </section>
 
-      {/* Expired table */}
-      {expired && (expired.expired.count > 0 || expired.expiringSoon.count > 0) && (
-        <div className="card">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="font-semibold text-gray-800 text-sm">Expired / Expiring Extinguishers</h3>
-              <p className="text-xs text-gray-400">{expired.expired.count} expired · {expired.expiringSoon.count} expiring within 60 days</p>
-            </div>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[500px] text-sm">
-              <thead className="table-head">
-                <tr>
-                  {['Serial No.', 'Location', 'Type', 'Expiry Date', 'Status'].map(h => <th key={h} className="table-head-cell">{h}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {[...expired.expired.data, ...expired.expiringSoon.data].slice(0, 10).map(e => (
-                  <tr key={e.id} className="table-row">
-                    <td className="table-cell font-mono text-xs font-semibold">{e.serialNumber}</td>
-                    <td className="table-cell">{e.location}</td>
-                    <td className="table-cell">{e.type}</td>
-                    <td className="table-cell text-xs">{e.expiryDate?.split('T')[0]}</td>
-                    <td className="table-cell">
-                      <span className={`badge ${new Date(e.expiryDate) < new Date() ? 'badge-expired' : 'badge-maintenance'}`}>
-                        {new Date(e.expiryDate) < new Date() ? 'Expired' : 'Expiring Soon'}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Export section */}
-      <div className="card">
-        <h3 className="font-semibold text-gray-800 text-sm mb-1">Export Data</h3>
-        <p className="text-xs text-gray-400 mb-4">Download reports as PDF or CSV files</p>
-        <div className="divide-y divide-gray-100">
-          {EXPORT_TYPES.filter(t => t !== 'users' || true).map(type => (
-            <div key={type} className="flex items-center justify-between py-3">
-              <div>
-                <p className="text-sm font-medium text-gray-700 capitalize">{type === 'expired' ? 'Expired Extinguishers' : type}</p>
-                <p className="text-xs text-gray-400">
-                  {type === 'extinguishers' ? 'Full inventory list'
-                    : type === 'inspections' ? 'All inspection records'
-                    : type === 'expired' ? 'Expired extinguisher data'
-                    : type === 'maintenance' ? 'All maintenance logs'
-                    : 'System user list (Admin only)'}
-                </p>
+      {/* ── EXPORT ───────────────────────────────────────────── */}
+      <section>
+        <SectionHeader title="Export Reports" sub="Download reports in PDF or CSV format" />
+        <div className="card divide-y divide-gray-100">
+          {EXPORT_TYPES.filter(t => t.key !== 'users' || isAdmin).map(({ key, label, desc, hasPdf }) => (
+            <div key={key} className="flex items-center justify-between py-3.5 gap-4">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-gray-800">{label}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{desc}</p>
               </div>
-              <div className="flex items-center gap-2">
-                {type !== 'users' && (
+              <div className="flex items-center gap-2 shrink-0">
+                {hasPdf && (
                   <button
-                    onClick={() => handlePDF(type)}
+                    onClick={() => handlePDF(key)}
                     disabled={!!exporting}
                     className="btn-outline btn-sm"
                   >
-                    {exporting === `pdf-${type}` ? 'Generating...' : 'PDF'}
+                    {exporting === `pdf-${key}` ? (
+                      <><span className="w-3 h-3 border-2 border-crimson-400 border-t-crimson-700 rounded-full animate-spin" /> Generating...</>
+                    ) : 'PDF'}
                   </button>
                 )}
                 <button
-                  onClick={() => handleCSV(type)}
+                  onClick={() => handleCSV(key)}
                   disabled={!!exporting}
                   className="btn-crimson btn-sm"
                 >
-                  {exporting === `csv-${type}` ? 'Exporting...' : 'CSV'}
+                  {exporting === `csv-${key}` ? (
+                    <><span className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Exporting...</>
+                  ) : 'CSV'}
                 </button>
               </div>
             </div>
           ))}
         </div>
-      </div>
+      </section>
     </div>
   );
 }

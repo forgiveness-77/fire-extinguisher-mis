@@ -38,32 +38,123 @@ function validateDateRange(from, to) {
 
 /**
  * @swagger
- * tags:
- *   name: Reports
- *   description: Real-time reports and data exports (PDF/CSV)
+ * components:
+ *   schemas:
+ *     Error:
+ *       type: object
+ *       properties:
+ *         error:
+ *           type: string
+ *           example: "A descriptive error message"
+ *     PeriodCount:
+ *       type: object
+ *       properties:
+ *         period:
+ *           type: string
+ *           example: "2026"
+ *         count:
+ *           type: integer
+ *           example: 12
  */
 
+/**
+ * @swagger
+ * tags:
+ *   name: Reports
+ *   description: |
+ *     Real-time system reports and data exports.
+ *     **PDF export** — Admin or Inspector.  **CSV export** — Admin only.
+ *     All report endpoints require authentication. No new data is created.
+ */
+
+// ─── GET /summary ─────────────────────────────────────────────────────────────
 /**
  * @swagger
  * /api/reports/summary:
  *   get:
  *     summary: Live system dashboard counters
+ *     description: |
+ *       Returns a real-time snapshot of the entire system. Includes extinguisher status breakdown,
+ *       inspection counts, maintenance activity, compliance figures, and user counts.
+ *       Used to drive the main dashboard.
  *     tags: [Reports]
- *     security: [{ bearerAuth: [] }]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: System-wide summary counters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 extinguishers:
+ *                   type: object
+ *                   properties:
+ *                     total:       { type: integer, example: 50 }
+ *                     active:      { type: integer, example: 30, description: "Assigned and not expired" }
+ *                     inactive:    { type: integer, example: 15, description: "Unassigned and not expired" }
+ *                     expired:     { type: integer, example: 5 }
+ *                     expiringSoon: { type: integer, example: 3, description: "Expire within 30 days" }
+ *                 inspections:
+ *                   type: object
+ *                   properties:
+ *                     total:     { type: integer, example: 120 }
+ *                     scheduled: { type: integer, example: 20 }
+ *                     confirmed: { type: integer, example: 10 }
+ *                     completed: { type: integer, example: 85 }
+ *                     cancelled: { type: integer, example: 5 }
+ *                     overdue:   { type: integer, example: 2, description: "Past due date but not completed/cancelled" }
+ *                 maintenance:
+ *                   type: object
+ *                   properties:
+ *                     total:          { type: integer, example: 200 }
+ *                     lastThirtyDays: { type: integer, example: 12 }
+ *                 compliance:
+ *                   type: object
+ *                   properties:
+ *                     expired:            { type: integer, example: 5 }
+ *                     expiringSoon:       { type: integer, example: 3 }
+ *                     overdueInspections: { type: integer, example: 2 }
+ *                     compliant:          { type: integer, example: 42, description: "Total extinguishers minus expired and expiring" }
+ *                 users:
+ *                   type: object
+ *                   properties:
+ *                     total:            { type: integer, example: 25 }
+ *                     pendingInspectors: { type: integer, example: 1 }
+ *                 generatedAt:
+ *                   type: string
+ *                   format: date-time
+ *                   example: "2026-06-03T10:30:00.000Z"
+ *             example:
+ *               extinguishers: { total: 50, active: 30, inactive: 15, expired: 5, expiringSoon: 3 }
+ *               inspections: { total: 120, scheduled: 20, confirmed: 10, completed: 85, cancelled: 5, overdue: 2 }
+ *               maintenance: { total: 200, lastThirtyDays: 12 }
+ *               compliance: { expired: 5, expiringSoon: 3, overdueInspections: 2, compliant: 42 }
+ *               users: { total: 25, pendingInspectors: 1 }
+ *               generatedAt: "2026-06-03T10:30:00.000Z"
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
 router.get('/summary', authenticate, asyncHandler(async (req, res) => {
   const now = new Date();
   const thirtyDays = new Date(now.getTime() + 30 * 86400000);
 
-  const [allExt, totalUsers, totalInsp, scheduledInsp, completedInsp, cancelledInsp, pendingInsp, totalMaint] = await Promise.all([
+  const [allExt, totalUsers, totalInsp, confirmedInsp, completedInsp, cancelledInsp, scheduledInsp, overdueInsp, totalMaint, recentMaint] = await Promise.all([
     prisma.extinguisher.findMany(),
     prisma.user.count(),
     prisma.inspection.count(),
     prisma.inspection.count({ where: { status: 'confirmed' } }),
     prisma.inspection.count({ where: { status: 'completed' } }),
     prisma.inspection.count({ where: { status: 'cancelled' } }),
-    prisma.inspection.count({ where: { status: 'pending' } }),
+    prisma.inspection.count({ where: { status: { in: ['scheduled', 'pending'] } } }),
+    prisma.inspection.count({ where: { status: { in: ['scheduled', 'pending', 'confirmed'] }, scheduledDate: { lt: now } } }),
     prisma.maintenanceLog.count(),
+    prisma.maintenanceLog.count({ where: { dateOfAction: { gte: new Date(now.getTime() - 30 * 86400000) } } }),
   ]);
 
   const active   = allExt.filter(e => new Date(e.expiryDate) >= now && e.assignedUserId).length;
@@ -75,33 +166,101 @@ router.get('/summary', authenticate, asyncHandler(async (req, res) => {
 
   res.json({
     extinguishers: { total: allExt.length, active, inactive, expired, expiringSoon },
-    inspections:   { total: totalInsp, pending: pendingInsp, confirmed: scheduledInsp, completed: completedInsp, cancelled: cancelledInsp },
-    maintenance:   { total: totalMaint },
+    inspections:   { total: totalInsp, scheduled: scheduledInsp, confirmed: confirmedInsp, completed: completedInsp, cancelled: cancelledInsp, overdue: overdueInsp },
+    maintenance:   { total: totalMaint, lastThirtyDays: recentMaint },
+    compliance:    { expired, expiringSoon, overdueInspections: overdueInsp, compliant: allExt.length - expired - expiringSoon },
     users:         { total: totalUsers, pendingInspectors },
     generatedAt:   now.toISOString(),
   });
 }));
 
+// ─── GET /extinguishers ───────────────────────────────────────────────────────
 /**
  * @swagger
  * /api/reports/extinguishers:
  *   get:
- *     summary: Extinguisher stock report grouped by period
+ *     summary: Extinguisher stock report grouped by registration period
+ *     description: |
+ *       Returns a stock report with summary counts broken down by type and status,
+ *       a time-series of registration counts grouped by `period`, and a paginated
+ *       record list for drilling down. Optionally filter by computed status.
  *     tags: [Reports]
- *     security: [{ bearerAuth: [] }]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: query
  *         name: period
- *         schema: { type: string, enum: [daily, monthly, yearly], default: yearly }
+ *         schema:
+ *           type: string
+ *           enum: [daily, monthly, yearly]
+ *           default: yearly
+ *         description: Time grouping for the registration trend chart
  *       - in: query
  *         name: status
- *         schema: { type: string, enum: [active, inactive, expired] }
+ *         schema:
+ *           type: string
+ *           enum: [active, inactive, expired]
+ *         description: Filter records by computed status
  *       - in: query
  *         name: page
- *         schema: { type: integer }
+ *         schema:
+ *           type: integer
+ *           default: 1
  *       - in: query
  *         name: limit
- *         schema: { type: integer }
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *     responses:
+ *       200:
+ *         description: Extinguisher stock report
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 summary:
+ *                   type: object
+ *                   properties:
+ *                     total:    { type: integer, example: 50 }
+ *                     byType:
+ *                       type: object
+ *                       example: { CO2: 20, Water: 15, Foam: 10, DryChemical: 5 }
+ *                     byStatus:
+ *                       type: object
+ *                       example: { active: 30, inactive: 15, expired: 5 }
+ *                 grouped:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/PeriodCount'
+ *                   example: [{ period: "2024", count: 12 }, { period: "2025", count: 20 }]
+ *                 period:
+ *                   type: string
+ *                   example: yearly
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     description: Extinguisher with computed status field
+ *                 pagination:
+ *                   type: object
+ *                 generatedAt:
+ *                   type: string
+ *                   format: date-time
+ *       400:
+ *         description: Invalid period value
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               value: { error: "period must be one of: daily, monthly, yearly" }
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
 router.get('/extinguishers', authenticate, asyncHandler(async (req, res) => {
   const { period = 'yearly', status } = req.query;
@@ -127,26 +286,83 @@ router.get('/extinguishers', authenticate, asyncHandler(async (req, res) => {
   res.json({ summary: { total, byType, byStatus }, grouped, period, data: data.map(e => ({ ...e, status: computeStatus(e) })), pagination: { total, page, limit, totalPages: Math.ceil(total/limit), hasNext: page*limit<total, hasPrev: page>1 }, generatedAt: new Date().toISOString() });
 }));
 
+// ─── GET /inspections ─────────────────────────────────────────────────────────
 /**
  * @swagger
  * /api/reports/inspections:
  *   get:
- *     summary: Inspection status report
+ *     summary: Inspection status report with date range filtering
+ *     description: Returns inspection counts broken down by status, upcoming count, and a paginated record list. Optionally filter by date range.
  *     tags: [Reports]
- *     security: [{ bearerAuth: [] }]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: query
  *         name: from
- *         schema: { type: string, format: date }
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Start of date range for scheduledDate
+ *         example: "2026-01-01"
  *       - in: query
  *         name: to
- *         schema: { type: string, format: date }
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: End of date range for scheduledDate
+ *         example: "2026-12-31"
  *       - in: query
  *         name: page
- *         schema: { type: integer }
+ *         schema:
+ *           type: integer
+ *           default: 1
  *       - in: query
  *         name: limit
- *         schema: { type: integer }
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *     responses:
+ *       200:
+ *         description: Inspection report
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 summary:
+ *                   type: object
+ *                   properties:
+ *                     total:
+ *                       type: integer
+ *                       example: 120
+ *                     byStatus:
+ *                       type: object
+ *                       example: { scheduled: 20, confirmed: 10, completed: 85, cancelled: 5 }
+ *                     upcoming:
+ *                       type: integer
+ *                       description: Future inspections in scheduled or confirmed status
+ *                       example: 8
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                 pagination:
+ *                   type: object
+ *                 generatedAt:
+ *                   type: string
+ *                   format: date-time
+ *       400:
+ *         description: Invalid date range
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
 router.get('/inspections', authenticate, asyncHandler(async (req, res) => {
   const { from, to } = req.query;
@@ -159,26 +375,88 @@ router.get('/inspections', authenticate, asyncHandler(async (req, res) => {
     prisma.inspection.count({ where }),
   ]);
   const byStatus = all.reduce((a,i) => { a[i.status]=(a[i.status]||0)+1; return a; }, {});
-  res.json({ summary: { total: all.length, byStatus, upcoming: all.filter(i => i.status === 'pending' && new Date(i.scheduledDate) >= new Date()).length }, data, pagination: { total, page, limit, totalPages: Math.ceil(total/limit), hasNext: page*limit<total, hasPrev: page>1 }, generatedAt: new Date().toISOString() });
+  res.json({ summary: { total: all.length, byStatus, upcoming: all.filter(i => ['scheduled','pending'].includes(i.status) && new Date(i.scheduledDate) >= new Date()).length }, data, pagination: { total, page, limit, totalPages: Math.ceil(total/limit), hasNext: page*limit<total, hasPrev: page>1 }, generatedAt: new Date().toISOString() });
 }));
 
+// ─── GET /expired ─────────────────────────────────────────────────────────────
 /**
  * @swagger
  * /api/reports/expired:
  *   get:
- *     summary: Expired and expiring extinguishers
+ *     summary: Expired and soon-to-expire extinguishers
+ *     description: |
+ *       Returns two lists:
+ *       - `expired` — extinguishers whose expiry date has already passed
+ *       - `expiringSoon` — extinguishers expiring within the next `within` days
+ *
+ *       Both lists are paginated independently using the same `page`/`limit` parameters.
  *     tags: [Reports]
- *     security: [{ bearerAuth: [] }]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: query
  *         name: within
- *         schema: { type: integer, default: 30 }
+ *         schema:
+ *           type: integer
+ *           default: 30
+ *           minimum: 1
+ *         description: Days ahead to check for upcoming expiries
+ *         example: 30
  *       - in: query
  *         name: page
- *         schema: { type: integer }
+ *         schema:
+ *           type: integer
+ *           default: 1
  *       - in: query
  *         name: limit
- *         schema: { type: integer }
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *     responses:
+ *       200:
+ *         description: Expired and expiring extinguisher lists
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 expired:
+ *                   type: object
+ *                   properties:
+ *                     count:
+ *                       type: integer
+ *                       example: 5
+ *                     data:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         description: Extinguisher with status="expired"
+ *                     pagination:
+ *                       type: object
+ *                 expiringSoon:
+ *                   type: object
+ *                   properties:
+ *                     count:
+ *                       type: integer
+ *                       example: 3
+ *                     withinDays:
+ *                       type: integer
+ *                       example: 30
+ *                     data:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                     pagination:
+ *                       type: object
+ *                 generatedAt:
+ *                   type: string
+ *                   format: date-time
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
 router.get('/expired', authenticate, asyncHandler(async (req, res) => {
   const within = parseInt(req.query.within, 10) || 30;
@@ -202,32 +480,99 @@ router.get('/expired', authenticate, asyncHandler(async (req, res) => {
   });
 }));
 
+// ─── GET /maintenance-history ─────────────────────────────────────────────────
 /**
  * @swagger
  * /api/reports/maintenance-history:
  *   get:
- *     summary: Maintenance history
+ *     summary: Maintenance history report grouped by period
+ *     description: |
+ *       Returns a time-series count of maintenance activity and a paginated record list.
+ *       Can be filtered to a specific extinguisher and/or date range.
  *     tags: [Reports]
- *     security: [{ bearerAuth: [] }]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: query
  *         name: extinguisherId
- *         schema: { type: string }
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Filter logs for a specific extinguisher
  *       - in: query
  *         name: from
- *         schema: { type: string, format: date }
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Start date filter for dateOfAction
+ *         example: "2026-01-01"
  *       - in: query
  *         name: to
- *         schema: { type: string, format: date }
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: End date filter for dateOfAction
+ *         example: "2026-12-31"
  *       - in: query
  *         name: period
- *         schema: { type: string, enum: [daily, monthly, yearly], default: monthly }
+ *         schema:
+ *           type: string
+ *           enum: [daily, monthly, yearly]
+ *           default: monthly
+ *         description: Time grouping for the trend chart
  *       - in: query
  *         name: page
- *         schema: { type: integer }
+ *         schema:
+ *           type: integer
+ *           default: 1
  *       - in: query
  *         name: limit
- *         schema: { type: integer }
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *     responses:
+ *       200:
+ *         description: Maintenance history report
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 summary:
+ *                   type: object
+ *                   properties:
+ *                     total:
+ *                       type: integer
+ *                       example: 48
+ *                     grouped:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/PeriodCount'
+ *                       example: [{ period: "2026-01", count: 5 }, { period: "2026-02", count: 8 }]
+ *                     period:
+ *                       type: string
+ *                       example: monthly
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                 pagination:
+ *                   type: object
+ *                 generatedAt:
+ *                   type: string
+ *                   format: date-time
+ *       400:
+ *         description: Invalid period or date range
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
 router.get('/maintenance-history', authenticate, asyncHandler(async (req, res) => {
   const { extinguisherId, from, to, period = 'monthly' } = req.query;
@@ -243,19 +588,68 @@ router.get('/maintenance-history', authenticate, asyncHandler(async (req, res) =
   res.json({ summary: { total: all.length, grouped: groupByPeriod(all,'dateOfAction',period), period }, data, pagination: { total, page, limit, totalPages: Math.ceil(total/limit), hasNext: page*limit<total, hasPrev: page>1 }, generatedAt: new Date().toISOString() });
 }));
 
-// ─── PDF EXPORT (fixed with bufferPages: true) ────────────────────────────────
+// ─── GET /export/pdf ──────────────────────────────────────────────────────────
 /**
  * @swagger
  * /api/reports/export/pdf:
  *   get:
  *     summary: Export report as PDF (Admin / Inspector)
+ *     description: |
+ *       Generates and streams a PDF report. The file is automatically downloaded by the browser.
+ *       TZW LTD branded with crimson header and footer, cream row alternation, and page numbering.
+ *
+ *       **Available report types:**
+ *       - `extinguishers` — full inventory with status
+ *       - `inspections` — all inspection records
+ *       - `expired` — expired extinguishers only
+ *       - `maintenance` — all maintenance logs
+ *
+ *       > **Tip:** Click "Download file" after executing in Swagger — the browser will open the PDF.
  *     tags: [Reports]
- *     security: [{ bearerAuth: [] }]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: query
  *         name: type
  *         required: true
- *         schema: { type: string, enum: [extinguishers, inspections, expired, maintenance] }
+ *         schema:
+ *           type: string
+ *           enum: [extinguishers, inspections, expired, maintenance]
+ *         description: Type of report to generate
+ *         example: extinguishers
+ *     responses:
+ *       200:
+ *         description: PDF file stream
+ *         content:
+ *           application/pdf:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *         headers:
+ *           Content-Disposition:
+ *             schema:
+ *               type: string
+ *               example: 'attachment; filename="fems-extinguishers-1717407600000.pdf"'
+ *       400:
+ *         description: Missing or invalid type parameter
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               value: { error: "type required: extinguishers, inspections, expired, maintenance" }
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       403:
+ *         description: Admin or Inspector role required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
 router.get('/export/pdf', authenticate, authorize(ROLES.ADMIN, ROLES.INSPECTOR), asyncHandler(async (req, res) => {
   const { type } = req.query;
@@ -336,7 +730,7 @@ router.get('/export/pdf', authenticate, authorize(ROLES.ADMIN, ROLES.INSPECTOR),
   } else if (type === 'maintenance') {
     const data = await prisma.maintenanceLog.findMany({ orderBy: { dateOfAction: 'desc' } });
     sectionTitle(`Maintenance logs: ${data.length}`);
-    drawHeader(['ID (short)', 'Ext. (short)', 'Inspector', 'Date', 'Actions', 'Conditions']);
+    drawHeader(['ID (short)', 'Ext. (short)', 'Inspector', 'Date', 'Actions', 'Issues']);
     data.forEach((m, i) => drawRow([m.id.slice(0,8)+'…', m.extinguisherId.slice(0,8)+'…', m.inspectorId.slice(0,8)+'…', m.dateOfAction.toISOString().split('T')[0], m.actionsTaken, m.conditionsNoted], i));
   }
 
@@ -352,19 +746,69 @@ router.get('/export/pdf', authenticate, authorize(ROLES.ADMIN, ROLES.INSPECTOR),
   doc.end();
 }));
 
-// ─── CSV EXPORT ───────────────────────────────────────────────────────────────
+// ─── GET /export/csv ──────────────────────────────────────────────────────────
 /**
  * @swagger
  * /api/reports/export/csv:
  *   get:
  *     summary: Export data as CSV (Admin only)
+ *     description: |
+ *       Streams a CSV file download. Includes a header row.
+ *       The `users` type is only available here (not in PDF export).
+ *
+ *       **CSV columns by type:**
+ *       - `extinguishers` — id, serialNumber, location, type, size, installationDate, expiryDate, status, assignedUserId, createdAt
+ *       - `inspections` — id, extinguisherId, scheduledById, inspectorId, scheduledDate, scheduledTime, status, notes, createdAt
+ *       - `expired` — id, serialNumber, location, type, size, expiryDate, assignedUserId
+ *       - `maintenance` — id, extinguisherId, inspectorId, actionsTaken, dateOfAction, conditionsNoted, notes, createdAt
+ *       - `users` — id, firstName, lastName, email, role, status, createdAt
+ *
+ *       > **Tip:** Click "Download file" after executing in Swagger to get the CSV.
  *     tags: [Reports]
- *     security: [{ bearerAuth: [] }]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: query
  *         name: type
  *         required: true
- *         schema: { type: string, enum: [extinguishers, inspections, expired, maintenance, users] }
+ *         schema:
+ *           type: string
+ *           enum: [extinguishers, inspections, expired, maintenance, users]
+ *         description: Dataset to export
+ *         example: extinguishers
+ *     responses:
+ *       200:
+ *         description: CSV file stream
+ *         content:
+ *           text/csv:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *         headers:
+ *           Content-Disposition:
+ *             schema:
+ *               type: string
+ *               example: 'attachment; filename="fems-extinguishers-2026-06-03.csv"'
+ *       400:
+ *         description: Missing or invalid type parameter
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               value: { error: "type required: extinguishers, inspections, expired, maintenance, users" }
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       403:
+ *         description: Admin role required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
 router.get('/export/csv', authenticate, authorize(ROLES.ADMIN), asyncHandler(async (req, res) => {
   const { type } = req.query;
@@ -383,13 +827,13 @@ router.get('/export/csv', authenticate, authorize(ROLES.ADMIN), asyncHandler(asy
   } else if (type === 'inspections') {
     headers = ['id','extinguisherId','scheduledById','inspectorId','scheduledDate','scheduledTime','status','notes','createdAt'];
     const data = await prisma.inspection.findMany({ orderBy: { scheduledDate: 'desc' } });
-    rows = data.map(i => ({ ...i, scheduledDate: i.scheduledDate.toISOString().split('T')[0], notifyEmails: undefined, createdAt: i.createdAt.toISOString() }));
+    rows = data.map(i => ({ ...i, scheduledDate: i.scheduledDate.toISOString().split('T')[0], notifyPersonnel: undefined, createdAt: i.createdAt.toISOString() }));
   } else if (type === 'expired') {
     headers = ['id','serialNumber','location','type','size','expiryDate','assignedUserId'];
     const data = await prisma.extinguisher.findMany({ where: { expiryDate: { lte: new Date() } }, orderBy: { expiryDate: 'asc' } });
     rows = data.map(e => ({ ...e, expiryDate: e.expiryDate.toISOString().split('T')[0] }));
   } else if (type === 'maintenance') {
-    headers = ['id','extinguisherId','inspectorId','actionsTaken','dateOfAction','conditionsNoted','createdAt'];
+    headers = ['id','extinguisherId','inspectorId','actionsTaken','dateOfAction','conditionsNoted','notes','createdAt'];
     const data = await prisma.maintenanceLog.findMany({ orderBy: { dateOfAction: 'desc' } });
     rows = data.map(m => ({ ...m, dateOfAction: m.dateOfAction.toISOString().split('T')[0], createdAt: m.createdAt.toISOString() }));
   } else if (type === 'users') {
